@@ -1,0 +1,587 @@
+---
+title: "Datathong 2026 fall1"
+author: "TIan Yuan"
+date: "2026-10-03"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This R Markdown document is made interactive using Shiny. Unlike the more traditional workflow of creating static reports, you can now create documents that allow your readers to change the assumptions underlying your analysis and see the results immediately. 
+
+To learn more, see [Interactive Documents](http://rmarkdown.rstudio.com/authoring_shiny.html).
+
+## Inputs and Outputs
+
+You can embed Shiny inputs and outputs in your document. Outputs are automatically updated whenever inputs change.  This demonstrates how a standard R plot can be made interactive by wrapping it in the Shiny `renderPlot` function. The `selectInput` and `sliderInput` functions create the input widgets used to drive the plot.
+
+```{r eruptions, echo=FALSE}
+library(shiny)
+library(pROC)
+inputPanel(
+  selectInput("n_breaks", label = "Number of bins:",
+              choices = c(10, 20, 35, 50), selected = 20),
+  
+  sliderInput("bw_adjust", label = "Bandwidth adjustment:",
+              min = 0.2, max = 2, value = 1, step = 0.2)
+)
+
+renderPlot({
+  hist(faithful$eruptions, probability = TRUE, breaks = as.numeric(input$n_breaks),
+       xlab = "Duration (minutes)", main = "Geyser eruption duration")
+  
+  dens <- density(faithful$eruptions, adjust = input$bw_adjust)
+  lines(dens, col = "blue")
+})
+```
+
+```{r , echo=FALSE}
+Sys.setenv(LANGUAGE = "en")
+library(ggplot2)
+data<-read.csv("January2015toNovember2025.csv",stringsAsFactors = FALSE)
+names(data)
+dim(data)
+str(data)
+colSums(is.na(data))
+sum(is.na(data$NatureTitle))
+sum(duplicated(data))
+sort(colMeans(is.na(data)), decreasing = TRUE)
+class(data$EventDate)
+range(data$EventDate)
+data$EventDate <- as.Date(
+  data$EventDate,
+  format = "%m/%d/%Y"
+)
+class(data$EventDate)
+library(readxl)
+library(dplyr)
+naic<-read_xlsx("2022_NAICS_Structure.xlsx",skip=2)
+names(naic)
+naic$`2022 NAICS Code` <- as.character(naic$`2022 NAICS Code`)
+data <- data |>
+  mutate(
+    Primary.NAICS = as.character(Primary.NAICS)
+  ) |>
+  left_join(
+    naic,
+    by = c("Primary.NAICS" = "2022 NAICS Code")
+  )
+names(data)
+
+head(
+  data |>
+    select(Primary.NAICS, `2022 NAICS Title`)
+)
+
+sum(is.na(data$`2022 NAICS Title`))
+data |>
+  filter(is.na(`2022 NAICS Title`)) |>
+  count(Primary.NAICS, sort = TRUE) |>
+  head(30)
+#calculate proportion of each year
+data |>
+  mutate(
+    Year = format(EventDate, "%Y"),
+    NAICS_matched = !is.na(`2022 NAICS Title`)
+  ) |>
+  group_by(Year) |>
+  summarise(
+    Total = n(),
+    Unmatched = sum(!NAICS_matched),
+    Unmatched_Percent = round(
+      mean(!NAICS_matched) * 100,
+      2
+    )
+  )
+data <- data |>
+  mutate(
+    NAICS2 = substr(Primary.NAICS, 1, 2),
+
+    Sector = case_when(
+      NAICS2 == "11" ~ "Agriculture, Forestry, Fishing and Hunting",
+      NAICS2 == "21" ~ "Mining, Quarrying, and Oil and Gas Extraction",
+      NAICS2 == "22" ~ "Utilities",
+      NAICS2 == "23" ~ "Construction",
+      NAICS2 %in% c("31", "32", "33") ~ "Manufacturing",
+      NAICS2 == "42" ~ "Wholesale Trade",
+      NAICS2 %in% c("44", "45") ~ "Retail Trade",
+      NAICS2 %in% c("48", "49") ~ "Transportation and Warehousing",
+      NAICS2 == "51" ~ "Information",
+      NAICS2 == "52" ~ "Finance and Insurance",
+      NAICS2 == "53" ~ "Real Estate and Rental and Leasing",
+      NAICS2 == "54" ~ "Professional, Scientific, and Technical Services",
+      NAICS2 == "55" ~ "Management of Companies and Enterprises",
+      NAICS2 == "56" ~ "Administrative and Support and Waste Management and Remediation Services",
+      NAICS2 == "61" ~ "Educational Services",
+      NAICS2 == "62" ~ "Health Care and Social Assistance",
+      NAICS2 == "71" ~ "Arts, Entertainment, and Recreation",
+      NAICS2 == "72" ~ "Accommodation and Food Services",
+      NAICS2 == "81" ~ "Other Services (except Public Administration)",
+      NAICS2 == "92" ~ "Public Administration",
+      TRUE ~ "Unknown"
+    )
+  )
+table(data$Sector)
+sector_count <- data |>
+  count(Sector)
+ggplot(sector_count, aes(x = n, y = Sector)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Blues") +
+  theme(
+    panel.background = element_rect(fill = "white"),
+    panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "sector_count",
+    x = "n",
+    y = "sectors"
+  )
+#injury by occupation
+data |>
+  group_by(Sector) |>
+  summarise(
+    Reports = n(),
+    Hospitalized = sum(Hospitalized)
+  )
+#calculate hospi rt#
+sector_summary <- data |>
+  group_by(Sector) |>
+  summarise(
+    Reports = n(),
+    Hospitalized = sum(Hospitalized)
+  )
+sector_summary <- mutate(
+  sector_summary,
+  Hospitalization_Rate = Hospitalized / Reports
+)
+ggplot(sector_summary, aes(x = Hospitalization_Rate, y = Sector)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Blues") +
+  theme(
+    panel.background = element_rect(fill = "white"),
+    panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "hospitallrate ",
+    x = "%",
+    y = "sectors"
+  )
+count(data, EventTitle, sort = TRUE)
+count(data, NatureTitle, sort = TRUE)
+#idea
+###################################################################################
+sort(unique(data$NatureTitle))
+data$Nature_Group <- ifelse(
+  grepl("fracture", data$NatureTitle, ignore.case = TRUE), "Fracture",
+  ifelse(
+    grepl("amputation|avulsion|enucleation", data$NatureTitle, ignore.case = TRUE), "Amputation",
+    ifelse(
+      grepl("burn|corrosion", data$NatureTitle, ignore.case = TRUE), "Burn",
+      ifelse(
+        grepl("sprain|strain|tear", data$NatureTitle, ignore.case = TRUE), "Sprain/Strain/Tear",
+        ifelse(
+          grepl("cut|laceration|puncture|open wound", data$NatureTitle, ignore.case = TRUE), "Open Wound",ifelse(
+            grepl("soreness|pain|hurt", data$NatureTitle, ignore.case = TRUE), "Pain/Soreness",
+
+            ifelse(
+              grepl("intracranial|concussion|brain", data$NatureTitle, ignore.case = TRUE), "Brain/Head Injury",
+
+              ifelse(
+                grepl("crush", data$NatureTitle, ignore.case = TRUE), "Crushing",
+
+                ifelse(
+                  grepl("internal injur", data$NatureTitle, ignore.case = TRUE), "Internal Injury",
+
+                  ifelse(
+                    grepl("heat exhaustion|heat and light|heat", data$NatureTitle, ignore.case = TRUE), "Heat-related",
+
+                    ifelse(
+                      grepl("poison", data$NatureTitle, ignore.case = TRUE), "Poisoning",
+
+                      ifelse(
+                        grepl("trauma", data$NatureTitle, ignore.case = TRUE), "Trauma - Unspecified",
+                        ifelse(
+                          grepl("Bruis|contusi", data$NatureTitle, ignore.case=TRUE), "Bruise",
+                          ifelse(
+                            grepl("disloca",data$NatureTitle, ignore.case=TRUE),"Dislocation",
+                            ifelse(
+                            grepl("gunsho",data$NatureTitle, ignore.case=TRUE),"Gun",
+                            ifelse(
+                            grepl("allerg",data$NatureTitle, ignore.case=TRUE),"allergy related",
+                            ifelse(
+                            grepl("soft tissue",data$NatureTitle, ignore.case=TRUE),"soft tissue",
+                              
+                            
+                          
+          "Other"
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+)
+)
+)
+)
+)
+table(data$Nature_Group)
+other <- data[data$Nature_Group == "Other", ]
+head(
+  sort(table(other$NatureTitle), decreasing = TRUE),
+  30
+)
+prop.table(table(data$Amputation, useNA = "ifany")) * 100
+table(data$Amputation, useNA = "ifany")
+table(data$Hospitalized, useNA = "ifany")
+prop.table(table(data$Hospitalized, useNA = "ifany")) * 100
+data <- data |>
+  mutate(
+    Hospitalized_binary = ifelse(Hospitalized >= 1, 1, 0)
+  )
+table(data$Loss.of.Eye, useNA = "ifany")
+
+prop.table(
+  table(data$Loss.of.Eye, useNA = "ifany")
+) * 100
+data <- data |>
+  mutate(
+    Amputation_binary = ifelse(Amputation >= 1, 1, 0),
+    EyeLoss_binary = ifelse(Loss.of.Eye >= 1, 1, 0)
+  )
+```
+```{r , echo=FALSE}
+
+model_data <- data |>
+  select(
+    Amputation_binary,
+    Sector,
+    EventTitle,
+    SourceTitle,
+    State,
+    EventDate
+  ) |>
+  na.omit()
+str(data)
+
+n_distinct(model_data$EventTitle)
+n_distinct(model_data$SourceTitle)
+n_distinct(model_data$Sector)
+n_distinct(model_data$State)
+data |>
+  count(EventTitle) |>
+  summarise(
+    Total_Event_Types = n(),
+    Min_Count = min(n),
+    Median_Count = median(n),
+    Max_Count = max(n)
+  )
+head(
+  data |>
+    select(Event, EventTitle),
+  30
+)
+data <- data |>
+  mutate(
+    Event_char = as.character(Event),
+    Event_Division = substr(Event_char, 1, 1)
+  )
+data |>
+  count(Event_Division, sort = TRUE)
+data <- data |>
+  mutate(
+    Event_Group = case_when(
+      Event_Division == "1" ~ "Violence / Persons / Animals",
+      Event_Division == "2" ~ "Transportation Incidents",
+      Event_Division == "3" ~ "Fires and Explosions",
+      Event_Division == "4" ~ "Falls, Slips, Trips",
+      Event_Division == "5" ~ "Harmful Substances / Environments",
+      Event_Division == "6" ~ "Contact with Objects / Equipment",
+      Event_Division == "7" ~ "Overexertion / Bodily Reaction",
+      Event_Division == "9" ~ "Nonclassifiable / Other",
+      TRUE ~ "Unknown"
+    ))
+head(
+  data |>
+    select(Source, SourceTitle),
+  30
+)
+data <- data |>
+  mutate(
+    Source_char = as.character(Source),
+    Source_Division = substr(Source_char, 1, 1)
+  )
+data|>
+  count(Source_Division)
+data <- data |>
+  mutate(
+    Source_Group = case_when(
+      Source_Division == "1" ~ "Chemicals and Chemical Products",
+      Source_Division == "2" ~ "Containers, Furniture, and Fixtures",
+      Source_Division == "3" ~ "Machinery",
+      Source_Division == "4" ~ "Parts and Materials",
+      Source_Division == "5" ~ "Persons, Plants, Animals, and Minerals",
+      Source_Division == "6" ~ "Structures and Surfaces",
+      Source_Division == "7" ~ "Tools, Instruments, and Equipment",
+      Source_Division == "8" ~ "Vehicles",
+      Source_Division == "9" ~ "Other Sources",
+      TRUE ~ "Unknown"
+    )
+  )
+```
+
+```{r , echo=FALSE}
+library(caret)
+data <- data |>
+  filter(!is.na(Amputation_binary))
+set.seed(123)
+index <- createDataPartition(
+  model_data$Amputation_binary,
+  p = 0.8,
+  list = FALSE
+)
+dattrain <- data[index, ]
+dattest <- data[-index, ]
+
+
+prop.table(table(data$Amputation_binary))
+
+prop.table(table(dattrain$Amputation_binary))
+
+prop.table(table(dattest$Amputation_binary))
+set.seed(123)
+#folds/ cross validation
+folds <- createFolds(
+  dattrain$Amputation_binary,
+  k = 5,
+  list = TRUE
+)
+val_index <- folds[[1]]
+
+cv_validation <- dattrain[val_index, ]
+cv_training <- dattrain[-val_index, ]
+#mod reg
+mod <- glm(
+  Amputation_binary ~ Sector + Event_Group + Source_Group + State,
+  data = cv_training,
+  family = binomial)
+pred_prob <- predict(
+  mod,
+  newdata = cv_validation,
+  type = "response"
+)
+head(pred_prob)
+#thhdd 0.5
+pred_class <- ifelse(
+  pred_prob >= 0.5,
+  1,
+  0
+)
+
+head(pred_class)
+#conf mat
+confusionMatrix(
+  factor(pred_class, levels = c(0, 1)),
+  factor(cv_validation$Amputation_binary, levels = c(0, 1)),
+  positive = "1"
+)
+#14102 good
+#No Information Rate : 0.7325          
+#P-Value [Acc > NIR] : <2e-16    
+# Sensitivity : 0.6773        identify how many cases                      **highlight**        
+##             Specificity : 0.8879          
+##          Pos Pred Value : 0.6882          
+##          Neg Pred Value : 0.8828          
+##              Prevalence : 0.2675          
+##          Detection Rate : 0.1812          
+##    Detection Prevalence : 0.2633          
+##       Balanced Accuracy : 0.7826          
+cv_resul <- data.frame(
+  Fold = 1:5,
+  Accuracy = NA,
+  Sensitivity = NA,
+  Specificity = NA,
+  Balanced_Accuracy = NA
+)
+for (i in 1:5) {
+
+  val_index <- folds[[i]]
+
+  cv_validation <- dattrain[val_index, ]
+  cv_training <- dattrain[-val_index, ]
+
+  model <- glm(
+    Amputation_binary ~ Sector + Event_Group + Source_Group + State,
+    data = cv_training,
+    family = binomial
+  )
+
+  pred_prob <- predict(
+    model,
+    newdata = cv_validation,
+    type = "response"
+  )
+  roc_obj <- roc(
+    cv_validation$Amputation_binary,
+    pred_prob
+)
+
+  cv_resul$AUC[i] <- as.numeric(auc(roc_obj))
+  pred_class <- ifelse(pred_prob >= 0.5, 1, 0)
+
+  cm <- confusionMatrix(
+    factor(pred_class, levels = c(0, 1)),
+    factor(cv_validation$Amputation_binary, levels = c(0, 1)),
+    positive = "1"
+  )
+
+  cv_resul$Accuracy[i] <- cm$overall["Accuracy"]
+  cv_resul$Sensitivity[i] <- cm$byClass["Sensitivity"]
+  cv_resul$Specificity[i] <- cm$byClass["Specificity"]
+  cv_resul$Balanced_Accuracy[i] <- cm$byClass["Balanced Accuracy"]
+}
+cm
+#see folds perform
+cv_resul
+colMeans(cv_resul[, -1])
+#stable quite
+#wanna use:pred_prob
+library(pROC)
+roc_obj <- roc(
+  cv_validation$Amputation_binary,
+  pred_prob
+)
+auc(roc_obj)
+#new col in cvresul
+cv_resul$AUC <- NA
+roc_obj <- roc(
+  cv_validation$Amputation_binary,
+  pred_prob
+)
+
+cv_resul$AUC[i] <- as.numeric(auc(roc_obj))
+#notes:
+##   Fold  Accuracy Sensitivity Specificity Balanced_Accuracy       AUC
+## 1    1 0.8315839   0.6773198   0.8879317         0.7826258 0.9007618
+## 2    2 0.8279380   0.6734244   0.8843893         0.7789069 0.8942793
+## 3    3 0.8329501   0.6790881   0.8895701         0.7843291 0.8983809
+## 4    4 0.8294610   0.6784897   0.8818716         0.7801807 0.8935418
+## 5    5 0.8273381   0.6786441   0.8798372         0.7792406 0.8957046
+##          Accuracy       Sensitivity       Specificity Balanced_Accuracy 
+##         0.8298542         0.6773932         0.8847200         0.7810566 
+##               AUC 
+##         0.8965337
+#stable***
+#final mod(likely)                 check***
+modfin<-glm(
+  Amputation_binary ~ Sector + Event_Group + Source_Group + State,
+  data = dattrain,
+  family = binomial
+)
+test_prob <- predict(
+  modfin,
+  newdata = dattest,
+  type = "response"
+)
+
+test_class <- ifelse(test_prob >= 0.5, 1, 0)
+test_cm <- confusionMatrix(
+  factor(test_class, levels = c(0, 1)),
+  factor(dattest$Amputation_binary, levels = c(0, 1)),
+  positive = "1"
+)
+test_roc <- roc(
+  dattest$Amputation_binary,
+  test_prob,
+  quiet = TRUE
+)
+test_cm
+test_cm
+auc(test_roc)
+
+```
+
+
+
+
+
+```{r, echo=FALSE}
+selectInput(
+  inputId = "sector",
+  label = "Industry Sector:",
+  choices = sort(unique(data$Sector))
+)
+selectInput(
+  inputId = "event",
+  label = "Event Type:",
+  choices = sort(unique(data$Event_Group))
+)
+
+selectInput(
+  inputId = "source",
+  label = "Source Type:",
+  choices = sort(unique(data$Source_Group))
+)
+
+selectInput(
+  inputId = "state",
+  label = "State:",
+  choices = sort(unique(data$State))
+)
+```
+
+```{r, echo=FALSE}
+
+new_case <- reactive({
+
+  data.frame(
+    Sector = input$sector,
+    Event_Group = input$event,
+    Source_Group = input$source,
+    State = input$state
+  )
+
+})
+severity_prob <- reactive({
+
+  predict(
+    modfin,
+    newdata = new_case(),
+    type = "response"
+  )
+
+})
+output$severity <- renderText({
+
+  paste0(
+    "Predicted Amputation Severity: ",
+    round(severity_prob() * 100, 1),
+    "%"
+  )
+
+})
+
+```
+
+```{r, echo=FALSE}
+renderText({
+  paste0(
+    "Predicted Amputation Severity: ",
+    round(severity_prob() * 100, 1),
+    "%"
+  )
+})
+```
+
+
