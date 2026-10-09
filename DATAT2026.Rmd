@@ -20,6 +20,11 @@ You can embed Shiny inputs and outputs in your document. Outputs are automatical
 
 ```{r eruptions, echo=FALSE}
 library(shiny)
+library(dplyr)
+library(ggplot2)
+library(quanteda)
+library(Matrix)
+library(shiny)
 library(pROC)
 inputPanel(
   selectInput("n_breaks", label = "Number of bins:",
@@ -40,6 +45,7 @@ renderPlot({
 
 ```{r , echo=FALSE}
 Sys.setenv(LANGUAGE = "en")
+library(quanteda)
 library(ggplot2)
 data<-read.csv("January2015toNovember2025.csv",stringsAsFactors = FALSE)
 names(data)
@@ -511,77 +517,433 @@ test_cm
 auc(test_roc)
 
 ```
+```{r, echo=FALSE}
+incident_data <- data |>
+  filter(
+    !is.na(Final.Narrative),
+    nzchar(trimws(as.character(Final.Narrative)))
+  ) |>
+  mutate(
+    CaseID = row_number(),
+    Narrative = as.character(Final.Narrative)
+  )
+```
 
-
-
-
+### Workplace Hazard Scenario
 
 ```{r, echo=FALSE}
 selectInput(
-  inputId = "sector",
-  label = "Industry Sector:",
-  choices = sort(unique(data$Sector))
-)
-selectInput(
-  inputId = "event",
-  label = "Event Type:",
-  choices = sort(unique(data$Event_Group))
+  "sector",
+  "Industry Sector:",
+  choices = sort(unique(na.omit(data$Sector)))
 )
 
 selectInput(
-  inputId = "source",
-  label = "Source Type:",
-  choices = sort(unique(data$Source_Group))
+  "event",
+  "Event Type:",
+  choices = sort(unique(na.omit(data$Event_Group)))
 )
 
 selectInput(
-  inputId = "state",
-  label = "State:",
-  choices = sort(unique(data$State))
+  "source",
+  "Source Type:",
+  choices = sort(unique(na.omit(data$Source_Group)))
+)
+
+selectInput(
+  "state",
+  "State:",
+  choices = sort(unique(na.omit(data$State)))
 )
 ```
 
 ```{r, echo=FALSE}
-
 new_case <- reactive({
-
   data.frame(
     Sector = input$sector,
     Event_Group = input$event,
     Source_Group = input$source,
     State = input$state
   )
-
 })
-severity_prob <- reactive({
 
-  predict(
-    modfin,
-    newdata = new_case(),
-    type = "response"
+amputation_prob <- reactive({
+  as.numeric(
+    predict(
+      modfin,
+      newdata = new_case(),
+      type = "response"
+    )
   )
-
 })
-output$severity <- renderText({
+
+historical_frequency <- reactive({
+  data |>
+    filter(
+      Sector == input$sector,
+      Event_Group == input$event,
+      Source_Group == input$source,
+      State == input$state
+    ) |>
+    summarise(Reports = n())
+})
+```
+
+### Scenario Indicators
+
+```{r, echo=FALSE}
+renderText({
+  probability <- amputation_prob()
+
+  if (!is.finite(probability)) {
+    return("Predicted Amputation Likelihood: Unavailable")
+  }
 
   paste0(
-    "Predicted Amputation Severity: ",
-    round(severity_prob() * 100, 1),
+    "Predicted Amputation Likelihood: ",
+    round(probability * 100, 1),
     "%"
   )
-
 })
-
 ```
 
 ```{r, echo=FALSE}
 renderText({
   paste0(
-    "Predicted Amputation Severity: ",
-    round(severity_prob() * 100, 1),
-    "%"
+    "Historical Severe Injury Reports: ",
+    historical_frequency()$Reports
   )
 })
 ```
 
+### Workplace Injury Priority Matrix
 
+```{r, echo=FALSE}
+renderPlot({
+
+  frequency <- historical_frequency()$Reports
+  probability <- amputation_prob() * 100
+
+  validate(
+    need(
+      is.finite(probability),
+      "Prediction is unavailable for this scenario."
+    )
+  )
+
+  plot_data <- data.frame(
+    Frequency = frequency,
+    Amputation = probability
+  )
+
+  ggplot(
+    plot_data,
+    aes(x = Frequency, y = Amputation)
+  ) +
+    geom_point(
+      size = 5,
+      color = "red"
+    ) +
+    scale_y_continuous(
+      limits = c(0, 100)
+    ) +
+    labs(
+      title = "Workplace Injury Scenario",
+      subtitle = "Historical reports and estimated amputation likelihood",
+      x = "Historical Severe Injury Reports",
+      y = "Predicted Amputation Likelihood (%)"
+    ) +
+    theme_minimal(base_size = 14)
+})
+```
+
+### Top 5 Reported Incident Patterns
+
+```{r, echo=FALSE}
+renderPlot({
+
+  top_patterns <- data |>
+    filter(Sector == input$sector) |>
+    count(
+      Event_Group,
+      name = "Reports",
+      sort = TRUE
+    ) |>
+    slice_head(n = 5)
+
+  validate(
+    need(
+      nrow(top_patterns) > 0,
+      "No incidents found for this sector."
+    )
+  )
+
+  ggplot(
+    top_patterns,
+    aes(
+      x = Reports,
+      y = reorder(Event_Group, Reports)
+    )
+  ) +
+    geom_col(fill = "steelblue") +
+    labs(
+      title = "Top 5 Reported Incident Patterns",
+      subtitle = paste("Industry:", input$sector),
+      x = "Number of Severe Injury Reports",
+      y = "Event Type"
+    ) +
+    theme_minimal(base_size = 12)
+})
+```
+
+### Incident Case Finder
+
+```{r, echo=FALSE}
+incident_cases <- reactive({
+
+  data |>
+    filter(
+      Sector == input$sector,
+      Event_Group == input$event,
+      Source_Group == input$source,
+      State == input$state
+    ) |>
+    arrange(desc(EventDate)) |>
+    select(
+      EventDate,
+      State,
+      EventTitle,
+      SourceTitle,
+      Hospitalized,
+      Amputation,
+      Final.Narrative
+    ) |>
+    slice_head(n = 10) |>
+    mutate(
+      EventDate = as.character(EventDate)
+    )
+})
+```
+
+```{r, echo=FALSE}
+renderTable({
+  incident_cases()
+}, striped = TRUE, bordered = TRUE)
+```
+
+## Incident Similarity Finder
+
+Search historical OSHA severe injury reports using a written incident description.
+
+### Prepare Text Search
+
+```{r, echo=FALSE}
+incident_tokens <- tokens(
+  incident_data$Narrative,
+  remove_punct = TRUE,
+  remove_numbers = TRUE
+)
+
+incident_tokens <- tokens_tolower(
+  incident_tokens
+)
+
+incident_tokens <- tokens_remove(
+  incident_tokens,
+  pattern = stopwords("en")
+)
+
+incident_tokens <- tokens_wordstem(
+  incident_tokens,
+  language = "english"
+)
+
+incident_dfm <- dfm(incident_tokens)
+
+incident_tfidf <- dfm_tfidf(
+  incident_dfm,
+  scheme_tf = "count",
+  scheme_df = "inverse"
+)
+
+case_matrix <- as(
+  incident_tfidf,
+  "dgCMatrix"
+)
+
+case_norms <- sqrt(
+  Matrix::rowSums(case_matrix ^ 2)
+)
+
+idf <- log10(
+  ndoc(incident_dfm) /
+    pmax(docfreq(incident_dfm), 1)
+)
+```
+
+### Similarity Search Function
+
+```{r, echo=FALSE}
+search_incidents <- function(
+  query,
+  top_n = 5,
+  event_filter = "All"
+) {
+
+  empty_results <- incident_data[0, ] |>
+    mutate(
+      Similarity = numeric(0),
+      EventDate = as.character(EventDate)
+    ) |>
+    select(
+      Similarity,
+      EventDate,
+      State,
+      EventTitle,
+      SourceTitle,
+      Amputation,
+      Narrative
+    )
+
+  query_tokens <- tokens(
+    query,
+    remove_punct = TRUE,
+    remove_numbers = TRUE
+  )
+
+  query_tokens <- tokens_tolower(
+    query_tokens
+  )
+
+  query_tokens <- tokens_remove(
+    query_tokens,
+    pattern = stopwords("en")
+  )
+
+  query_tokens <- tokens_wordstem(
+    query_tokens,
+    language = "english"
+  )
+
+  query_dfm <- dfm(query_tokens)
+
+  query_dfm <- dfm_match(
+    query_dfm,
+    features = featnames(incident_dfm)
+  )
+
+  query_matrix <- as(
+    query_dfm,
+    "dgCMatrix"
+  )
+
+  query_matrix <- query_matrix %*%
+    Matrix::Diagonal(x = idf)
+
+  query_norm <- sqrt(
+    sum(query_matrix ^ 2)
+  )
+
+  if (!is.finite(query_norm) || query_norm == 0) {
+    return(empty_results)
+  }
+
+  similarity <- as.numeric(
+    case_matrix %*% Matrix::t(query_matrix)
+  ) / (case_norms * query_norm)
+
+  similarity[!is.finite(similarity)] <- 0
+
+  # Apply event filter before ranking
+  if (event_filter != "All") {
+
+    excluded <- is.na(incident_data$Event_Group) |
+      incident_data$Event_Group != event_filter
+
+    similarity[excluded] <- 0
+  }
+
+  best <- order(
+    similarity,
+    decreasing = TRUE
+  )
+
+  best <- head(
+    best[similarity[best] > 0],
+    top_n
+  )
+
+  if (length(best) == 0) {
+    return(empty_results)
+  }
+
+  incident_data[best, ] |>
+    mutate(
+      Similarity = round(similarity[best], 3),
+      EventDate = as.character(EventDate)
+    ) |>
+    select(
+      Similarity,
+      EventDate,
+      State,
+      EventTitle,
+      SourceTitle,
+      Amputation,
+      Narrative
+    )
+}
+```
+
+### Search Historical Incidents
+
+```{r, echo=FALSE}
+textInput(
+  "incident_query",
+  "Describe an incident:",
+  placeholder = "A worker injured his hand while cleaning machinery"
+)
+
+selectInput(
+  "incident_event",
+  "Filter by Event Type:",
+  choices = c(
+    "All",
+    sort(unique(na.omit(incident_data$Event_Group)))
+  ),
+  selected = "All"
+)
+
+actionButton(
+  "search_button",
+  "Find Similar Incidents"
+)
+
+search_results <- eventReactive(
+  input$search_button,
+  {
+
+    req(nzchar(trimws(input$incident_query)))
+
+    search_incidents(
+      query = input$incident_query,
+      top_n = 5,
+      event_filter = input$incident_event
+    )
+  }
+)
+
+renderTable({
+
+  results <- search_results()
+
+  validate(
+    need(
+      nrow(results) > 0,
+      "No matching incidents found. Try a different description or event type."
+    )
+  )
+
+  results
+
+}, striped = TRUE, bordered = TRUE)
+```
