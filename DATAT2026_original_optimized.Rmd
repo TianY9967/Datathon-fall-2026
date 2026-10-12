@@ -1,0 +1,1492 @@
+---
+title: "Quick Safety Exploration Dashboard"
+author: "TIan Yuan"
+output: html_document
+runtime: shiny
+resource_files:
+- train_event_classifier_builtin.R
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r libraries, echo=FALSE, include=FALSE}
+library(quanteda.textmodels)
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(quanteda)
+library(Matrix)
+library(pROC)
+library(stringr)
+```
+
+
+```{r , echo=FALSE, include=FALSE}
+Sys.setenv(LANGUAGE = "en")
+library(quanteda)
+library(ggplot2)
+data<-read.csv("January2015toNovember2025.csv",stringsAsFactors = FALSE)
+names(data)
+dim(data)
+colSums(is.na(data))
+sum(is.na(data$NatureTitle))
+sum(duplicated(data))
+sort(colMeans(is.na(data)), decreasing = TRUE)
+class(data$EventDate)
+range(data$EventDate)
+data$EventDate <- as.Date(
+  data$EventDate,
+  format = "%m/%d/%Y"
+)
+class(data$EventDate)
+library(readxl)
+library(dplyr)
+naic<-read_xlsx("2022_NAICS_Structure.xlsx",skip=2)
+names(naic)
+naic$`2022 NAICS Code` <- as.character(naic$`2022 NAICS Code`)
+data <- data |>
+  mutate(
+    Primary.NAICS = as.character(Primary.NAICS)
+  ) |>
+  left_join(
+    naic,
+    by = c("Primary.NAICS" = "2022 NAICS Code")
+  )
+names(data)
+
+head(
+  data |>
+    select(Primary.NAICS, `2022 NAICS Title`)
+)
+
+sum(is.na(data$`2022 NAICS Title`))
+data |>
+  filter(is.na(`2022 NAICS Title`)) |>
+  count(Primary.NAICS, sort = TRUE) |>
+  head(30)
+#calculate proportion of each year
+data |>
+  mutate(
+    Year = format(EventDate, "%Y"),
+    NAICS_matched = !is.na(`2022 NAICS Title`)
+  ) |>
+  group_by(Year) |>
+  summarise(
+    Total = n(),
+    Unmatched = sum(!NAICS_matched),
+    Unmatched_Percent = round(
+      mean(!NAICS_matched) * 100,
+      2
+    )
+  )
+data <- data |>
+  mutate(
+    NAICS2 = substr(Primary.NAICS, 1, 2),
+
+    Sector = case_when(
+      NAICS2 == "11" ~ "Agriculture, Forestry, Fishing and Hunting",
+      NAICS2 == "21" ~ "Mining, Quarrying, and Oil and Gas Extraction",
+      NAICS2 == "22" ~ "Utilities",
+      NAICS2 == "23" ~ "Construction",
+      NAICS2 %in% c("31", "32", "33") ~ "Manufacturing",
+      NAICS2 == "42" ~ "Wholesale Trade",
+      NAICS2 %in% c("44", "45") ~ "Retail Trade",
+      NAICS2 %in% c("48", "49") ~ "Transportation and Warehousing",
+      NAICS2 == "51" ~ "Information",
+      NAICS2 == "52" ~ "Finance and Insurance",
+      NAICS2 == "53" ~ "Real Estate and Rental and Leasing",
+      NAICS2 == "54" ~ "Professional, Scientific, and Technical Services",
+      NAICS2 == "55" ~ "Management of Companies and Enterprises",
+      NAICS2 == "56" ~ "Administrative and Support and Waste Management and Remediation Services",
+      NAICS2 == "61" ~ "Educational Services",
+      NAICS2 == "62" ~ "Health Care and Social Assistance",
+      NAICS2 == "71" ~ "Arts, Entertainment, and Recreation",
+      NAICS2 == "72" ~ "Accommodation and Food Services",
+      NAICS2 == "81" ~ "Other Services (except Public Administration)",
+      NAICS2 == "92" ~ "Public Administration",
+      TRUE ~ "Unknown"
+    )
+  )
+table(data$Sector)
+sector_count <- data |>
+  count(Sector)
+ggplot(sector_count, aes(x = n, y = Sector)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Blues") +
+  theme(
+    panel.background = element_rect(fill = "white"),
+    panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "sector_count",
+    x = "n",
+    y = "sectors"
+  )
+#injury by occupation
+data |>
+  group_by(Sector) |>
+  summarise(
+    Reports = n(),
+    Hospitalized = sum(Hospitalized)
+  )
+#calculate hospi rt#
+sector_summary <- data |>
+  group_by(Sector) |>
+  summarise(
+    Reports = n(),
+    Hospitalized = sum(Hospitalized)
+  )
+sector_summary <- mutate(
+  sector_summary,
+  Hospitalization_Rate = Hospitalized / Reports
+)
+ggplot(sector_summary, aes(x = Hospitalization_Rate, y = Sector)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Blues") +
+  theme(
+    panel.background = element_rect(fill = "white"),
+    panel.grid.major = element_line(colour = "grey70", linewidth = 0.2),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "hospitallrate ",
+    x = "%",
+    y = "sectors"
+  )
+count(data, EventTitle, sort = TRUE)
+count(data, NatureTitle, sort = TRUE)
+#idea
+###################################################################################
+sort(unique(data$NatureTitle))
+data$Nature_Group <- ifelse(
+  grepl("fracture", data$NatureTitle, ignore.case = TRUE), "Fracture",
+  ifelse(
+    grepl("amputation|avulsion|enucleation", data$NatureTitle, ignore.case = TRUE), "Amputation",
+    ifelse(
+      grepl("burn|corrosion", data$NatureTitle, ignore.case = TRUE), "Burn",
+      ifelse(
+        grepl("sprain|strain|tear", data$NatureTitle, ignore.case = TRUE), "Sprain/Strain/Tear",
+        ifelse(
+          grepl("cut|laceration|puncture|open wound", data$NatureTitle, ignore.case = TRUE), "Open Wound",ifelse(
+            grepl("soreness|pain|hurt", data$NatureTitle, ignore.case = TRUE), "Pain/Soreness",
+
+            ifelse(
+              grepl("intracranial|concussion|brain", data$NatureTitle, ignore.case = TRUE), "Brain/Head Injury",
+
+              ifelse(
+                grepl("crush", data$NatureTitle, ignore.case = TRUE), "Crushing",
+
+                ifelse(
+                  grepl("internal injur", data$NatureTitle, ignore.case = TRUE), "Internal Injury",
+
+                  ifelse(
+                    grepl("heat exhaustion|heat and light|heat", data$NatureTitle, ignore.case = TRUE), "Heat-related",
+
+                    ifelse(
+                      grepl("poison", data$NatureTitle, ignore.case = TRUE), "Poisoning",
+
+                      ifelse(
+                        grepl("trauma", data$NatureTitle, ignore.case = TRUE), "Trauma - Unspecified",
+                        ifelse(
+                          grepl("Bruis|contusi", data$NatureTitle, ignore.case=TRUE), "Bruise",
+                          ifelse(
+                            grepl("disloca",data$NatureTitle, ignore.case=TRUE),"Dislocation",
+                            ifelse(
+                            grepl("gunsho",data$NatureTitle, ignore.case=TRUE),"Gun",
+                            ifelse(
+                            grepl("allerg",data$NatureTitle, ignore.case=TRUE),"allergy related",
+                            ifelse(
+                            grepl("soft tissue",data$NatureTitle, ignore.case=TRUE),"soft tissue",
+                              
+                            
+                          
+          "Other"
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+)
+)
+)
+)
+)
+table(data$Nature_Group)
+other <- data[data$Nature_Group == "Other", ]
+head(
+  sort(table(other$NatureTitle), decreasing = TRUE),
+  30
+)
+prop.table(table(data$Amputation, useNA = "ifany")) * 100
+table(data$Amputation, useNA = "ifany")
+table(data$Hospitalized, useNA = "ifany")
+prop.table(table(data$Hospitalized, useNA = "ifany")) * 100
+data <- data |>
+  mutate(
+    Hospitalized_binary = ifelse(Hospitalized >= 1, 1, 0)
+  )
+table(data$Loss.of.Eye, useNA = "ifany")
+
+prop.table(
+  table(data$Loss.of.Eye, useNA = "ifany")
+) * 100
+data <- data |>
+  mutate(
+    Amputation_binary = ifelse(Amputation >= 1, 1, 0),
+    EyeLoss_binary = ifelse(Loss.of.Eye >= 1, 1, 0)
+  )
+```
+
+```{r , include=FALSE}
+
+
+str(data)
+
+n_distinct(data$EventTitle)
+n_distinct(data$SourceTitle)
+n_distinct(data$Sector)
+n_distinct(data$State)
+data |>
+  count(EventTitle) |>
+  summarise(
+    Total_Event_Types = n(),
+    Min_Count = min(n),
+    Median_Count = median(n),
+    Max_Count = max(n)
+  )
+head(
+  data |>
+    select(Event, EventTitle),
+  30
+)
+data <- data |>
+  mutate(
+    Event_char = as.character(Event),
+    Event_Division = substr(Event_char, 1, 1)
+  )
+data |>
+  count(Event_Division, sort = TRUE)
+data <- data |>
+  mutate(
+    Event_Group = case_when(
+      Event_Division == "1" ~ "Violence / Persons / Animals",
+      Event_Division == "2" ~ "Transportation Incidents",
+      Event_Division == "3" ~ "Fires and Explosions",
+      Event_Division == "4" ~ "Falls, Slips, Trips",
+      Event_Division == "5" ~ "Harmful Substances / Environments",
+      Event_Division == "6" ~ "Contact with Objects / Equipment",
+      Event_Division == "7" ~ "Overexertion / Bodily Reaction",
+      Event_Division == "9" ~ "Nonclassifiable / Other",
+      TRUE ~ "Unknown"
+    ))
+head(
+  data |>
+    select(Source, SourceTitle),
+  30
+)
+data <- data |>
+  mutate(
+    Source_char = as.character(Source),
+    Source_Division = substr(Source_char, 1, 1)
+  )
+data|>
+  count(Source_Division)
+data <- data |>
+  mutate(
+    Source_Group = case_when(
+      Source_Division == "1" ~ "Chemicals and Chemical Products",
+      Source_Division == "2" ~ "Containers, Furniture, and Fixtures",
+      Source_Division == "3" ~ "Machinery",
+      Source_Division == "4" ~ "Parts and Materials",
+      Source_Division == "5" ~ "Persons, Plants, Animals, and Minerals",
+      Source_Division == "6" ~ "Structures and Surfaces",
+      Source_Division == "7" ~ "Tools, Instruments, and Equipment",
+      Source_Division == "8" ~ "Vehicles",
+      Source_Division == "9" ~ "Other Sources",
+      TRUE ~ "Unknown"
+    )
+  )
+```
+
+```{r export-event-training,include=FALSE,eval=FALSE}
+event_model_data <- data |>
+  select(Final.Narrative, Event_Group) |>
+  filter(
+    !is.na(Final.Narrative),
+    trimws(Final.Narrative) != "",
+    !is.na(Event_Group),
+    Event_Group != "Unknown"
+  )
+
+saveRDS(event_model_data, "event_model_data.rds")
+```
+```{r , include=FALSE}
+library(caret)
+
+model_data <- data |>
+  select(
+    Amputation_binary,
+    Sector,
+    Event_Group,
+    Source_Group,
+    State,
+    EventDate
+  ) |>
+  na.omit()
+
+set.seed(123)
+index <- createDataPartition(
+  model_data$Amputation_binary,
+  p = 0.8,
+  list = FALSE
+)
+dattrain <- model_data[index, ]
+dattest <- model_data[-index, ]
+
+
+prop.table(table(data$Amputation_binary))
+
+prop.table(table(dattrain$Amputation_binary))
+
+prop.table(table(dattest$Amputation_binary))
+# Deployment optimization: 5-fold cross-validation is omitted at startup.
+# Previously computed validation results remain documented in the original Rmd.
+# Train only the final model required by the interactive application.
+#final mod(likely)                 check***
+modfin<-glm(
+  Amputation_binary ~ Sector + Event_Group + Source_Group + State,
+  data = dattrain,
+  family = binomial
+)
+# Release training-only/test-only objects after fitting.
+rm(model_data, dattest, index)
+gc(verbose = FALSE)
+
+```
+
+```{r, include=FALSE}
+incident_data <- data |>
+  filter(
+    !is.na(Final.Narrative),
+    nzchar(trimws(as.character(Final.Narrative)))
+  ) |>
+  mutate(
+    CaseID = row_number(),
+    Narrative = as.character(Final.Narrative)
+  )
+extract_incident <- function(text) {
+
+  text <- str_to_lower(coalesce(as.character(text), ""))
+
+  data.frame(
+
+    # Task: What was the worker doing?
+    Task = case_when(
+      str_detect(text, "\\b(clean|cleaning|washing|wiping|sanitizing)\\b") ~ "Cleaning",
+
+      str_detect(text, "\\b(repair|repairing|maintenance|fixing|servicing)\\b") ~ "Maintenance",
+
+      str_detect(text, "\\b(loading|unloading|lifting|carrying|moving materials)\\b") ~ "Material Handling",
+
+      str_detect(text, "\\b(installing|installation|assembling|assembly)\\b") ~ "Installation / Assembly",
+
+      str_detect(text, "\\b(cutting|sawing|grinding|drilling)\\b") ~ "Cutting / Machining",
+
+      str_detect(text, "\\b(driving|operating|transporting)\\b") ~ "Operation / Driving",
+
+      TRUE ~ "Unknown"
+    ),
+
+    # Equipment: What equipment was involved?
+    Equipment = case_when(
+      str_detect(text, "\\b(conveyor|conveyor belt)\\b") ~ "Conveyor",
+
+      str_detect(text, "\\b(forklift|lift truck)\\b") ~ "Forklift",
+
+      str_detect(text, "\\b(ladder|stepladder)\\b") ~ "Ladder",
+
+      str_detect(text, "\\b(scaffold|scaffolding)\\b") ~ "Scaffold",
+
+      str_detect(text, "\\b(press|stamping machine|hydraulic press)\\b") ~ "Press",
+
+      str_detect(text, "\\b(saw|chainsaw|table saw)\\b") ~ "Saw",
+
+      str_detect(text, "\\b(grinder|grinding machine)\\b") ~ "Grinder",
+
+      str_detect(text, "\\b(truck|tractor|trailer)\\b") ~ "Vehicle",
+
+      TRUE ~ "Unknown"
+    ),
+
+    # Body part: What part was injured?
+    Body_Part = case_when(
+      str_detect(text, "\\b(hand|hands|finger|fingers|thumb)\\b") ~ "Hand/Finger",
+
+      str_detect(text, "\\b(foot|feet|ankle|toe|toes)\\b") ~ "Foot/Ankle",
+
+      str_detect(text, "\\b(arm|elbow|wrist|forearm)\\b") ~ "Arm/Wrist",
+
+      str_detect(text, "\\b(leg|knee|thigh|shin)\\b") ~ "Leg/Knee",
+
+      str_detect(text, "\\b(head|skull|scalp)\\b") ~ "Head",
+
+      str_detect(text, "\\b(eye|eyes)\\b") ~ "Eye",
+
+      str_detect(text, "\\b(back|spine|spinal)\\b") ~ "Back/Spine",
+
+      str_detect(text, "\\b(chest|rib|ribs)\\b") ~ "Chest",
+
+      TRUE ~ "Unknown"
+    ),
+
+    # Environment: Where did it happen?
+    Environment = case_when(
+      str_detect(text, "\\b(warehouse|storage facility)\\b") ~ "Warehouse",
+
+      str_detect(text, "\\b(construction site|jobsite)\\b") ~ "Construction Site",
+
+      str_detect(text, "\\b(factory|manufacturing plant|production floor)\\b") ~ "Manufacturing Facility",
+
+      str_detect(text, "\\b(roof|rooftop)\\b") ~ "Roof",
+
+      str_detect(text, "\\b(outdoor|outside|outdoors)\\b") ~ "Outdoor",
+
+      str_detect(text, "\\b(confined space|tank interior|manhole)\\b") ~ "Confined Space",
+
+      TRUE ~ "Unknown"
+    ),
+
+    # Injury mechanism: How did the injury occur?
+    Injury_Mechanism = case_when(
+      str_detect(text, "\\b(pulled into|pulled by|drawn into|caught in|caught between)\\b") ~
+  "Caught / Drawn Into Machinery",
+      str_detect(text, "\\b(caught|trapped|pinched|entangled)\\b") ~ "Caught / Trapped",
+
+      str_detect(text, "\\b(struck|hit by|striking)\\b") ~ "Struck By",
+
+      str_detect(text, "\\b(fell|falling|slipped|tripped)\\b") ~ "Fall / Slip / Trip",
+
+      str_detect(text, "\\b(burned|burnt|scalded)\\b") ~ "Burn",
+
+      str_detect(text, "\\b(cut|cutting|punctured|stabbed)\\b") ~ "Cut / Puncture",
+
+      str_detect(text, "\\b(crushed|compressed)\\b") ~ "Crushing",
+
+      str_detect(text, "\\b(exposed|inhaled|ingested)\\b") ~ "Exposure",
+      str_detect(text, "\\b(electrical shock|electric shock|electrocuted|electrocution)\\b") ~
+  "Electrical Injury",
+
+str_detect(text, "\\b(choking|choked|strangled|suffocated)\\b") ~
+  "Asphyxiation / Choking",
+
+str_detect(text, "\\b(punched|kicked|assaulted|attacked)\\b") ~
+  "Physical Assault",
+
+str_detect(text, "\\b(splashed|sprayed)\\b") ~
+  "Splash / Spray Exposure",
+
+str_detect(text, "\\b(pulled into|pulled by|drawn into)\\b") ~
+  "Caught / Drawn Into Machinery",
+str_detect(text, "\\b(fell|falling|slipped|tripped|jumped off)\\b") ~
+  "Fall / Slip / Trip",
+str_detect(text, "\\b(rolled his ankle|rolled her ankle|twisted ankle|twisted knee|sprained)\\b") ~
+  "Twist / Sprain",
+      TRUE ~ "Unknown"
+    ),
+
+    # Immediate cause: Observable event, not root cause
+   Immediate_Cause = case_when(
+
+  str_detect(text, "\\b(exploded|explosion|blew up)\\b") ~
+    "Explosion",
+
+  str_detect(text, "\\b(pinned|trapped|caught|entangled)\\b") ~
+    "Caught / Pinned / Trapped",
+
+  str_detect(text, "\\b(crushed|crushing|compressed)\\b") ~
+    "Crushing",
+
+  str_detect(text, "\\b(struck by|hit by|fell onto|fell on)\\b") ~
+    "Struck / Impact",
+
+  str_detect(text, "\\b(fell from|fell off|fell approximately|fell about|fell [0-9]+ feet)\\b") ~
+    "Fall from height",
+
+  str_detect(text, "\\b(slipped|slipping|tripped|stumbled|missed a rung)\\b") ~
+    "Slip / Trip / Fall",
+
+  str_detect(text, "\\b(fell|falling)\\b") ~
+    "Fall - Unspecified",
+  str_detect(text, "\\b(blade broke|blade shattered|grinding wheel broke)\\b") ~
+  "Tool / Blade Failure",
+
+  str_detect(text, "\\b(cut off|cut by|cut with|punctured|stepped on a nail)\\b") ~
+    "Cut / Puncture",
+
+  str_detect(text, "\\b(burn|burns|burned|burnt|scalded)\\b") ~ "Burn",
+
+  str_detect(text, "\\b(jumped the curb|vehicle struck|car struck)\\b") ~
+    "Vehicle Impact",
+
+  TRUE ~ "Unknown"
+)
+)
+}
+extracted <- extract_incident(incident_data$Final.Narrative)
+head(extracted)
+incident_data <- bind_cols(incident_data, extracted)
+table(incident_data$Task)
+table(incident_data$Equipment)
+table(incident_data$Body_Part)
+table(incident_data$Environment)
+table(incident_data$Injury_Mechanism)
+table(incident_data$Immediate_Cause)
+incident_data |>
+  summarise(
+    across(
+      c(Task, Equipment, Body_Part,
+        Environment, Injury_Mechanism, Immediate_Cause),
+      ~ round(mean(.x != "Unknown") * 100, 2)
+    )
+  )
+incident_data |>
+  filter(Immediate_Cause == "Unknown") |>
+  select(Final.Narrative, Injury_Mechanism) |>
+  slice_head(n = 20)
+```
+
+```{r event-classifier, include=FALSE}
+classifier <- readRDS("event_classifier.rds")
+
+predict_event <- function(description) {
+  x <- tokens(
+    description,
+    remove_punct = TRUE,
+    remove_numbers = TRUE
+  )
+
+  x <- tokens_tolower(x)
+  x <- tokens_remove(x, stopwords("en"))
+  x <- tokens_wordstem(x, language = "english")
+
+  x <- dfm(x)
+  x <- dfm_match(x, features = classifier$features)
+
+  if (ntoken(x)[1] == 0) {
+    return("Unknown")
+  }
+
+  as.character(predict(classifier$model, newdata = x))[1]
+}
+```
+### Workplace Hazard Scenario
+
+```{r, echo=FALSE}
+
+selectInput(
+  "sector", "Industry Sector:",
+  choices = c("All", sort(unique(na.omit(data$Sector)))),
+  selected = "All"
+)
+
+selectInput(
+  "event", "Event Type:",
+  choices = c("All", sort(unique(na.omit(data$Event_Group)))),
+  selected = "All"
+)
+
+selectInput(
+  "source", "Source Type:",
+  choices = c("All", sort(unique(na.omit(data$Source_Group)))),
+  selected = "All"
+)
+
+selectInput(
+  "state", "State:",
+  choices = c("All", sort(unique(na.omit(data$State)))),
+  selected = "All"
+)
+```
+
+```{r, echo=FALSE, include=FALSE}
+new_case <- reactive({
+  data.frame(
+    Sector = input$sector,
+    Event_Group = input$event,
+    Source_Group = input$source,
+    State = input$state
+  )
+})
+
+amputation_prob <- reactive({
+
+  filtered <- data |>
+    filter(
+      (input$sector == "All" | Sector == input$sector),
+      (input$event == "All" | Event_Group == input$event),
+      (input$source == "All" | Source_Group == input$source),
+      (input$state == "All" | State == input$state)
+    ) |>
+    filter(
+      !is.na(Sector),
+      !is.na(Event_Group),
+      !is.na(Source_Group),
+      !is.na(State)
+    )
+
+  if (nrow(filtered) == 0) {
+    return(NA_real_)
+  }
+
+  probabilities <- tryCatch(
+    predict(
+      modfin,
+      newdata = filtered,
+      type = "response"
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(probabilities)) {
+    return(NA_real_)
+  }
+
+  mean(probabilities, na.rm = TRUE)
+})
+
+historical_frequency <- reactive({
+  data |>
+    filter(
+      input$sector == "All" | Sector == input$sector,
+      input$event == "All" | Event_Group == input$event,
+      input$source == "All" | Source_Group == input$source,
+      input$state == "All" | State == input$state
+    ) |>
+    summarise(Reports = n())
+})
+```
+
+### Scenario Indicators
+
+```{r, echo=FALSE}
+renderText({
+  probability <- amputation_prob()
+
+  if (!is.finite(probability)) {
+    return("Predicted Amputation Likelihood: Unavailable")
+  }
+
+  paste0(
+    "Predicted Amputation Likelihood: ",
+    round(probability * 100, 1),
+    "%"
+  )
+})
+```
+
+```{r, echo=FALSE}
+renderText({
+  paste0(
+    "Historical Severe Injury Reports: ",
+    historical_frequency()$Reports
+  )
+})
+```
+
+### Workplace Injury Priority Matrix
+
+```{r, echo=FALSE}
+renderPlot({
+
+  frequency <- historical_frequency()$Reports
+  probability <- amputation_prob() * 100
+
+  validate(
+    need(
+      is.finite(probability),
+      "Prediction is unavailable for this scenario."
+    )
+  )
+
+  plot_data <- data.frame(
+    Frequency = frequency,
+    Amputation = probability
+  )
+
+  ggplot(
+    plot_data,
+    aes(x = Frequency, y = Amputation)
+  ) +
+    geom_point(
+      size = 5,
+      color = "red"
+    ) +
+    scale_y_continuous(
+      limits = c(0, 100)
+    ) +
+    labs(
+      title = "Workplace Injury Scenario",
+      subtitle = "Historical reports and estimated amputation likelihood",
+      x = "Historical Severe Injury Reports",
+      y = "Predicted Amputation Likelihood (%)"
+    ) +
+    theme_minimal(base_size = 14)
+})
+```
+
+### Top 5 Reported Incident Patterns
+
+```{r, echo=FALSE}
+renderPlot({
+
+  top_patterns <- data |>
+    filter(input$sector == "All" | Sector == input$sector) |>
+    count(
+      Event_Group,
+      name = "Reports",
+      sort = TRUE
+    ) |>
+    slice_head(n = 5)
+
+  validate(
+    need(
+      nrow(top_patterns) > 0,
+      "No incidents found for this sector."
+    )
+  )
+
+  ggplot(
+    top_patterns,
+    aes(
+      x = Reports,
+      y = reorder(Event_Group, Reports)
+    )
+  ) +
+    geom_col(fill = "steelblue") +
+    labs(
+      title = "Top 5 Reported Incident Patterns",
+      subtitle = paste("Industry:", input$sector),
+      x = "Number of Severe Injury Reports",
+      y = "Event Type"
+    ) +
+    theme_minimal(base_size = 12)
+})
+```
+
+
+## Incident Similarity Finder
+
+Search historical OSHA severe injury reports using a written incident description.
+
+### Prepare Text Search
+
+```{r, include=FALSE}
+incident_tokens <- tokens(
+  incident_data$Narrative,
+  remove_punct = TRUE,
+  remove_numbers = TRUE
+)
+
+incident_tokens <- tokens_tolower(
+  incident_tokens
+)
+
+incident_tokens <- tokens_remove(
+  incident_tokens,
+  pattern = stopwords("en")
+)
+
+incident_tokens <- tokens_wordstem(
+  incident_tokens,
+  language = "english"
+)
+
+incident_dfm <- dfm(incident_tokens)
+# Restrict vocabulary to reduce memory on shinyapps.io.
+# Use a minimum document frequency and a bounded vocabulary.
+incident_dfm <- dfm_trim(incident_dfm, min_docfreq = 3, docfreq_type = "count")
+incident_dfm <- dfm_keep(incident_dfm, pattern = names(topfeatures(incident_dfm, 12000)))
+rm(incident_tokens)
+gc(verbose = FALSE)
+
+incident_tfidf <- dfm_tfidf(
+  incident_dfm,
+  scheme_tf = "count",
+  scheme_df = "inverse"
+)
+
+case_matrix <- as(
+  incident_tfidf,
+  "dgCMatrix"
+)
+
+case_norms <- sqrt(
+  Matrix::rowSums(case_matrix ^ 2)
+)
+
+idf <- log10(
+  ndoc(incident_dfm) /
+    pmax(docfreq(incident_dfm), 1)
+)
+# Search only needs sparse matrix, norms, IDF and the feature names.
+rm(incident_tfidf)
+gc(verbose = FALSE)
+```
+
+### Similarity Search Function
+
+```{r, include=FALSE}
+search_incidents <- function(
+  query,
+  top_n = 5,
+  event_filter = "All"
+) {
+
+  empty_results <- incident_data[0, ] |>
+    mutate(
+      Similarity = numeric(0),
+      EventDate = as.character(EventDate)
+    ) |>
+    select(
+  Similarity,
+  EventDate,
+  State,
+  Sector,
+  Event_Group,
+  Source_Group,
+  EventTitle,
+  SourceTitle,
+  Amputation,
+  Narrative,
+  Task,
+  Equipment,
+  Body_Part,
+  Environment,
+  Injury_Mechanism,
+  Immediate_Cause,
+  NatureTitle,
+  Nature_Group
+)
+
+  query_tokens <- tokens(
+    query,
+    remove_punct = TRUE,
+    remove_numbers = TRUE
+  )
+
+  query_tokens <- tokens_tolower(
+    query_tokens
+  )
+
+  query_tokens <- tokens_remove(
+    query_tokens,
+    pattern = stopwords("en")
+  )
+
+  query_tokens <- tokens_wordstem(
+    query_tokens,
+    language = "english"
+  )
+
+  query_dfm <- dfm(query_tokens)
+
+  query_dfm <- dfm_match(
+    query_dfm,
+    features = featnames(incident_dfm)
+  )
+
+  query_matrix <- as(
+    query_dfm,
+    "dgCMatrix"
+  )
+
+  query_matrix <- query_matrix %*%
+    Matrix::Diagonal(x = idf)
+
+  query_norm <- sqrt(
+    sum(query_matrix ^ 2)
+  )
+
+  if (!is.finite(query_norm) || query_norm == 0) {
+    return(empty_results)
+  }
+
+  similarity <- as.numeric(
+    case_matrix %*% Matrix::t(query_matrix)
+  ) / (case_norms * query_norm)
+
+  similarity[!is.finite(similarity)] <- 0
+
+  # Apply event filter before ranking
+  if (event_filter != "All") {
+
+    excluded <- is.na(incident_data$Event_Group) |
+      incident_data$Event_Group != event_filter
+
+    similarity[excluded] <- 0
+  }
+
+  best <- order(
+    similarity,
+    decreasing = TRUE
+  )
+
+  best <- head(
+    best[similarity[best] > 0],
+    top_n
+  )
+
+  if (length(best) == 0) {
+    return(empty_results)
+  }
+
+  incident_data[best, ] |>
+    mutate(
+      Similarity = round(similarity[best], 3),
+      EventDate = as.character(EventDate)
+    ) |>
+   
+      select(
+  Similarity,
+  EventDate,
+  State,
+  Sector,
+  Event_Group,
+  Source_Group,
+  EventTitle,
+  SourceTitle,
+  Amputation,
+  Narrative,
+  Task,
+  Equipment,
+  Body_Part,
+  Environment,
+  Injury_Mechanism,
+  Immediate_Cause,
+  NatureTitle,
+Nature_Group
+)
+    
+}
+```
+
+### Search Historical Incidents
+
+```{r, echo=FALSE}
+textInput(
+  "incident_query",
+  "Describe an incident:",
+  placeholder = "A worker injured his hand while cleaning machinery"
+)
+renderText({
+  req(nzchar(trimws(input$incident_query)))
+
+  paste(
+    "AI-Predicted Event Type:",
+    predict_event(input$incident_query)
+  )
+})
+selectInput(
+  "incident_event",
+  "Filter by Event Type:",
+  choices = c(
+    "All",
+    "AI Predicted",
+    sort(unique(na.omit(incident_data$Event_Group)))
+  ),
+  selected = "All"
+)
+
+actionButton(
+  "search_button",
+  "Find Similar Incidents"
+)
+
+search_results <- eventReactive(
+  input$search_button,
+  {
+    req(nzchar(trimws(input$incident_query)))
+
+    predicted <- predict_event(input$incident_query)
+
+    selected_filter <- input$incident_event
+
+    if (selected_filter == "AI Predicted") {
+      selected_filter <- predicted
+    }
+
+    if (selected_filter == "Unknown") {
+      selected_filter <- "All"
+    }
+
+    search_incidents(
+      query = input$incident_query,
+      top_n = 5,
+      event_filter = selected_filter
+    )
+  }
+)
+
+
+renderTable({
+  results <- search_results()
+
+  validate(
+    need(
+      nrow(results) > 0,
+      "No matching incidents found. Try a different description or event type."
+    )
+  )
+
+  results
+}, striped = TRUE, bordered = TRUE)
+selectInput(
+  "selected_case",
+  "Select a Case for Review:",
+  choices = character(0)
+)
+
+observeEvent(search_results(), {
+
+  results <- search_results()
+
+  choices <- if (nrow(results) > 0) {
+    setNames(
+      as.character(seq_len(nrow(results))),
+      paste0(
+        "Case ", seq_len(nrow(results)),
+        " - ", results$State,
+        " (", results$EventDate, ")"
+      )
+    )
+  } else {
+    character(0)
+  }
+
+  updateSelectInput(
+    session,
+    "selected_case",
+    choices = choices,
+    selected = if (length(choices) > 0) choices[1] else character(0)
+  )
+})
+
+selected_incident <- reactive({
+  results <- search_results()
+
+  req(input$selected_case)
+
+  index <- as.integer(input$selected_case)
+
+  req(
+    !is.na(index),
+    index >= 1,
+    index <= nrow(results)
+  )
+
+  results[index, , drop = FALSE]
+})
+selected_risk <- reactive({
+
+  case <- selected_incident()
+  req(nrow(case) == 1)
+
+  probability <- tryCatch(
+    as.numeric(
+      predict(
+        modfin,
+        newdata = case,
+        type = "response"
+      )
+    ),
+    error = function(e) NA_real_
+  )
+
+  historical <- dattrain |>
+    filter(
+      Sector == case$Sector[1],
+      Event_Group == case$Event_Group[1],
+      Source_Group == case$Source_Group[1]
+    ) |>
+    summarise(
+      Reports = n(),
+      Rate = if (n() > 0) {
+        mean(Amputation_binary == 1, na.rm = TRUE)
+      } else {
+        NA_real_
+      }
+    )
+
+  list(
+    prediction = probability,
+    historical = historical
+  )
+})
+
+#Selected explain
+selected_explanation <- reactive({
+
+  case <- selected_incident()
+  req(nrow(case) == 1)
+
+  tryCatch({
+
+    terms <- predict(
+      modfin,
+      newdata = case,
+      type = "terms"
+    )
+
+    contributions <- data.frame(
+      Feature = colnames(terms),
+      Log_Odds_Contribution = as.numeric(terms[1, ])
+    )
+
+    contributions |>
+      mutate(
+        Log_Odds_Contribution =
+          round(Log_Odds_Contribution, 3)
+      ) |>
+      arrange(desc(abs(Log_Odds_Contribution)))
+
+  }, error = function(e) {
+    data.frame(
+      Feature = character(),
+      Log_Odds_Contribution = numeric()
+    )
+  })
+})
+renderUI({
+
+  case <- selected_incident()
+  risk <- selected_risk()
+  explanation <- selected_explanation()
+
+  req(case)
+ similar <- incident_data
+
+  nature_data <- similar |>
+    mutate(
+      Nature = ifelse(
+        is.na(Nature_Group) | Nature_Group == "",
+        "Unknown",
+        Nature_Group
+      )
+    ) |>
+    count(Nature, name = "Cases") |>
+    mutate(
+      Percentage = round(Cases / sum(Cases) * 100, 1)
+    ) |>
+    arrange(desc(Cases))
+  tagList(
+    h3("Incident Case Brief"),
+
+    tags$p(
+      tags$strong("Date: "),
+      case$EventDate
+    ),
+
+    tags$p(
+      tags$strong("State: "),
+      case$State
+    ),
+
+    tags$p(
+      tags$strong("Event Type: "),
+      case$EventTitle
+    ),
+
+    tags$p(
+      tags$strong("Source: "),
+      case$SourceTitle
+    ),
+
+    tags$p(
+      tags$strong("Amputation Reported: "),
+      ifelse(case$Amputation > 0, "Yes", "No")
+    ),
+
+    h4("Incident Description"),
+
+    tags$p(case$Narrative),
+    hr(),
+h4("Nature of Injury Distribution"),
+
+tags$p(
+  "Distribution of injury types among similar incidents."
+),
+
+tags$table(
+  class = "table table-striped table-bordered",
+
+  tags$thead(
+    tags$tr(
+      tags$th("Nature of Injury"),
+      tags$th("Cases"),
+      tags$th("Percentage")
+    )
+  ),
+
+  tags$tbody(
+    lapply(seq_len(nrow(nature_data)), function(i) {
+      tags$tr(
+        tags$td(nature_data$Nature[i]),
+        tags$td(nature_data$Cases[i]),
+        tags$td(paste0(nature_data$Percentage[i], "%"))
+      )
+    })
+  )
+),
+
+tags$p(
+  tags$em(
+    "Percentages are based on retrieved similar OSHA incidents, ",
+    "not all workplace injuries."
+  )
+),
+
+hr(),
+h4("Incident Nature & Safety Awareness"),
+
+h5("Nature of Incident"),
+
+tags$p(
+  "This incident involved ",
+  ifelse(
+    is.na(case$Task) | case$Task == "",
+    "an unspecified task",
+    tolower(case$Task)
+  ),
+  " and ",
+  ifelse(
+    is.na(case$Equipment) | case$Equipment == "",
+    "unspecified equipment",
+    tolower(case$Equipment)
+  ),
+  ". The identified injury mechanism was ",
+  ifelse(
+    is.na(case$Injury_Mechanism) |
+      case$Injury_Mechanism == "",
+    "not specified",
+    tolower(case$Injury_Mechanism)
+  ),
+  "."
+),
+
+h5("Potential Hazards"),
+
+tags$p(
+  if (grepl(
+    "conveyor|belt|machine|machinery",
+    paste(case$Narrative, case$Equipment),
+    ignore.case = TRUE
+  )) {
+    paste(
+      "Potential hazards include contact with moving",
+      "machine parts, entanglement, and unexpected",
+      "equipment movement."
+    )
+  } else {
+    paste(
+      "Potential hazards should be identified based on",
+      "the reported task, equipment, and incident circumstances."
+    )
+  }
+),
+
+h5("Safety Awareness Focus"),
+
+tags$p(
+  if (grepl(
+    "conveyor|belt|machine|machinery",
+    paste(case$Narrative, case$Equipment),
+    ignore.case = TRUE
+  )) {
+    paste(
+      "Workers should recognize hazards associated",
+      "with moving machinery and understand the importance",
+      "of machine guarding and appropriate hazardous",
+      "energy control procedures."
+    )
+  } else {
+    paste(
+      "Workers should recognize potential hazards",
+      "before starting similar tasks and review",
+      "appropriate safety precautions."
+    )
+  }
+),
+
+h5("Toolbox Talk Question"),
+
+tags$p(
+  "What hazards should workers identify before",
+  "performing a similar task, and what precautions",
+  "should be reviewed?"
+),
+
+tags$p(
+  tags$em(
+    "These safety awareness prompts are generated",
+    "from reported incident characteristics.",
+    "They are intended for training discussions",
+    "and do not establish the root cause of the incident."
+  )
+),
+
+hr(),
+
+
+    # New section: automatically extracted information
+    h4("AI-Assisted Incident Analysis"),
+
+    tags$p(
+      tags$strong("Task: "),
+      case$Task
+    ),
+
+    tags$p(
+      tags$strong("Equipment: "),
+      case$Equipment
+    ),
+
+    tags$p(
+      tags$strong("Body Part: "),
+      case$Body_Part
+    ),
+
+    tags$p(
+      tags$strong("Environment: "),
+      case$Environment
+    ),
+
+    tags$p(
+      tags$strong("Injury Mechanism: "),
+      case$Injury_Mechanism
+    ),
+
+    tags$p(
+      tags$strong("Immediate Cause: "),
+      case$Immediate_Cause
+    ),
+
+    tags$p(
+      tags$em(
+        "These labels are automatically extracted from the incident narrative using rule-based text analysis. They should be reviewed for accuracy."
+      )
+    ),
+    h4("Model Input Features"),
+
+tags$p(
+  tags$strong("Industry Sector: "),
+  case$Sector
+),
+
+tags$p(
+  tags$strong("Event Group: "),
+  case$Event_Group
+),
+
+tags$p(
+  tags$strong("Source Group: "),
+  case$Source_Group
+),
+
+tags$p(
+  tags$strong("State: "),
+  case$State
+),
+
+tags$p(
+  tags$em(
+    "These four variables are used by the Logistic Regression model ",
+    "to estimate the probability of reported amputation."
+  )
+),
+h4("Risk Context — Amputation Analysis"),
+
+tags$p(
+  tags$strong("Model-Estimated Amputation Probability: "),
+  if (is.finite(risk$prediction)) {
+    paste0(round(risk$prediction * 100, 1), "%")
+  } else {
+    "Unavailable"
+  }
+),
+
+tags$p(
+  tags$strong("Historical Amputation Rate: "),
+  if (is.finite(risk$historical$Rate)) {
+    paste0(round(risk$historical$Rate * 100, 1), "%")
+  } else {
+    "Unavailable"
+  }
+),
+
+tags$p(
+  tags$strong("Comparable Historical Reports: "),
+  risk$historical$Reports
+),
+
+tags$p(
+  tags$em(
+    "Estimates are based on OSHA-reported severe injury cases. ",
+    "They do not represent the probability of an accident occurring ",
+    "at a workplace. Historical comparisons use industry, event ",
+    "and source categories."
+  )
+),
+h4("Model Feature Contributions"),
+
+if (nrow(explanation) > 0) {
+  tags$table(
+    class = "table table-striped",
+    tags$thead(
+      tags$tr(
+        tags$th("Feature"),
+        tags$th("Log-Odds Contribution")
+      )
+    ),
+    tags$tbody(
+      lapply(seq_len(nrow(explanation)), function(i) {
+        tags$tr(
+          tags$td(explanation$Feature[i]),
+          tags$td(explanation$Log_Odds_Contribution[i])
+        )
+      })
+    )
+  )
+} else {
+  tags$p("Feature contributions unavailable.")
+},
+
+
+
+    h4("Questions for Safety Review"),
+
+    tags$ul(
+      tags$li(
+        "Could a similar incident occur at our workplace?"
+      ),
+      tags$li(
+        "What hazards should be checked before this task?"
+      ),
+      tags$li(
+        "What preventive measures should be reviewed?"
+      )
+    )
+  )
+})
+```
